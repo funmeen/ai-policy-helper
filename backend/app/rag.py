@@ -217,12 +217,21 @@ class RAGEngine:
         self.store.upsert(vectors, metas)
         return (len(self._doc_titles) - len(doc_titles_before), len(metas))
 
-    def retrieve(self, query: str, k: int = 4) -> List[Dict]:
+    def retrieve(self, query: str, k: int = 3) -> List[Dict]:
         t0 = time.time()
         qv = self.embedder.embed(query)
         results = self.store.search(qv, k=k)
         self.metrics.add_retrieval((time.time()-t0)*1000.0)
-        return [meta for score, meta in results]
+#        return [meta for score, meta in results]
+        seen = set()
+        unique = []
+
+        for score, meta in results:
+            key = (meta.get("title"), meta.get("section"), meta.get("text"))
+            if key not in seen:
+                seen.add(key)
+                unique.append(meta)
+        return unique
 
     def generate(self, query: str, contexts: List[Dict]) -> str:
         t0 = time.time()
