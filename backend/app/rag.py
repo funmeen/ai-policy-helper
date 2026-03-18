@@ -99,15 +99,27 @@ class QdrantStore:
 # ---- LLM provider ----
 class StubLLM:
     def generate(self, query: str, contexts: List[Dict]) -> str:
-        lines = [f"Answer (stub): Based on the following sources:"]
-        for c in contexts:
-            sec = c.get("section") or "Section"
-            lines.append(f"- {c.get('title')} — {sec}")
-        lines.append("Summary:")
-        # naive summary of top contexts
-        joined = " ".join([c.get("text", "") for c in contexts])
-        lines.append(joined[:600] + ("..." if len(joined) > 600 else ""))
-        return "\n".join(lines)
+        if not contexts:
+            return "No relevant information found in the policy documents."
+
+        # Build structured answer
+        answer = []
+        answer.append(f"Answer:")
+        
+        # Simple heuristic: extract key sentences
+        combined = " ".join([c.get("text", "") for c in contexts])
+        summary = combined[:300]
+
+        answer.append(summary + ("..." if len(combined) > 300 else ""))
+
+        # Add citations clearly
+        answer.append("\nSources:")
+        for i, c in enumerate(contexts, 1):
+            title = c.get("title", "Unknown")
+            section = c.get("section", "N/A")
+            answer.append(f"[{i}] {title} — {section}")
+
+        return "\n".join(answer)
 
 class OpenRouterLLM:
     def __init__(self, api_key: str, model: str = "openai/gpt-4o-mini"):
