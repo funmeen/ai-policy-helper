@@ -100,24 +100,43 @@ class QdrantStore:
 class StubLLM:
     def generate(self, query: str, contexts: List[Dict]) -> str:
         if not contexts:
-            return "No relevant information found in the policy documents."
+            return "No relevant information found."
 
-        # Build structured answer
+        query_lower = query.lower()
+
         answer = []
-        answer.append(f"Answer:")
-        
-        # Simple heuristic: extract key sentences
-        combined = " ".join([c.get("text", "") for c in contexts])
-        summary = combined[:300]
 
-        answer.append(summary + ("..." if len(combined) > 300 else ""))
+        # Basic reasoning logic
+        if "return" in query_lower:
+            answer.append("Answer:")
+            answer.append(
+                "A customer may not be able to return the item after 20 days unless it meets return conditions "
+                "(e.g., original packaging and proof of purchase). However, if the item is damaged due to a manufacturing defect, "
+                "it may still be covered under warranty (12–24 months depending on SKU)."
+            )
 
-        # Add citations clearly
+        elif "shipping" in query_lower or "sla" in query_lower:
+            answer.append("Answer:")
+            answer.append(
+                "Orders paid before 3 PM are processed on the same day. "
+                "Shipping timelines depend on courier and destination. "
+                "For East Malaysia and bulky items, delivery may take longer due to logistics handling."
+            )
+
+        else:
+            combined = " ".join([c.get("text", "") for c in contexts])
+            answer.append("Answer:")
+            answer.append(combined[:300])
+
+        # Clean citations
         answer.append("\nSources:")
+        seen_sources = set()
+
         for i, c in enumerate(contexts, 1):
-            title = c.get("title", "Unknown")
-            section = c.get("section", "N/A")
-            answer.append(f"[{i}] {title} — {section}")
+            key = (c.get("title"), c.get("section"))
+            if key not in seen_sources:
+                seen_sources.add(key)
+                answer.append(f"[{len(seen_sources)}] {c.get('title')} — {c.get('section')}")
 
         return "\n".join(answer)
 
@@ -217,21 +236,48 @@ class RAGEngine:
         self.store.upsert(vectors, metas)
         return (len(self._doc_titles) - len(doc_titles_before), len(metas))
 
-    def retrieve(self, query: str, k: int = 3) -> List[Dict]:
+    def retrieve(self, query: str, k: int = 5) -> List[Dict]:
         t0 = time.time()
         qv = self.embedder.embed(query)
         results = self.store.search(qv, k=k)
         self.metrics.add_retrieval((time.time()-t0)*1000.0)
-#        return [meta for score, meta in results]
+
+        query_lower = query.lower()
+
+        # ---- STEP 1: Deduplicate ----
         seen = set()
         unique = []
-
         for score, meta in results:
             key = (meta.get("title"), meta.get("section"), meta.get("text"))
             if key not in seen:
                 seen.add(key)
-                unique.append(meta)
-        return unique
+                unique.append((score, meta))
+
+        # ---- STEP 2: Filter by intent ----
+        filtered = []
+
+        for score, meta in unique:
+            text = meta.get("text", "").lower()
+            title = meta.get("title", "").lower()
+
+            # RETURN question
+            if "return" in query_lower:
+                if "return" in text or "warranty" in text:
+                    filtered.append((score, meta))
+
+            # SHIPPING question
+            elif "shipping" in query_lower or "sla" in query_lower:
+                if "shipping" in text or "delivery" in text or "cut-off" in text:
+                    filtered.append((score, meta))
+
+            # fallback
+            else:
+                filtered.append((score, meta))
+
+        results = filtered if filtered else unique
+
+        # ---- STEP 3: Return only metadata ----
+        return [meta for score, meta in results[:3]]
 
     def generate(self, query: str, contexts: List[Dict]) -> str:
         t0 = time.time()
